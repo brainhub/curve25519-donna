@@ -35,6 +35,30 @@ typedef unsigned uint128_t __attribute__((mode(TI)));
 #undef force_inline
 #define force_inline __attribute__((always_inline))
 
+// sqrt(-1)
+static const felem sqrt_neg_1 = {
+	0x061b274a0ea0b0, 0x00d5a5fc8f189d,
+	0x07ef5e9cbd0c60, 0x078595a6804c9e,
+	0x02b8324804fc1d
+};
+static const felem _1 = {
+	1, 0, 0, 0, 0
+};
+static const felem const *_1__sqrt_neg_1[2] = {
+	&_1,
+	&sqrt_neg_1
+};
+
+// d=486662
+static const unsigned _d = 0x76d06;
+
+// -1 (only for point validation)
+static const felem neg_1 = {
+	0x07ffffffffffec, 0x07ffffffffffff,
+	0x07ffffffffffff, 0x07ffffffffffff,
+	0x07ffffffffffff
+};
+
 /* Sum two numbers: output += in */
 static inline void force_inline
 fsum(limb *output, const limb *in) {
@@ -44,6 +68,7 @@ fsum(limb *output, const limb *in) {
   output[3] += in[3];
   output[4] += in[4];
 }
+
 
 /* Find the difference of two numbers: output = in - output
  * (note the order of the arguments!)
@@ -143,6 +168,46 @@ fmul(felem output, const felem in2, const felem in) {
   output[3] = r3;
   output[4] = r4;
 }
+
+/* Multiply a number by an integer: output = in * d
+ *
+ * based on fmul 
+ */
+static inline void force_inline
+fmuld(felem output, const felem in, const unsigned d) {
+  uint128_t t[5];
+  limb r0,r1,r2,r3,r4,s0,s1,s2,s3,s4,c;
+
+  r0 = d;
+
+  s0 = in[0];
+  s1 = in[1];
+  s2 = in[2];
+  s3 = in[3];
+  s4 = in[4];
+
+  t[0]  =  ((uint128_t) r0) * s0;
+  t[1]  =  ((uint128_t) r0) * s1;
+  t[2]  =  ((uint128_t) r0) * s2;
+  t[3]  =  ((uint128_t) r0) * s3;
+  t[4]  =  ((uint128_t) r0) * s4;
+
+                  r0 = (limb)t[0] & 0x7ffffffffffff; c = (limb)(t[0] >> 51);
+  t[1] += c;      r1 = (limb)t[1] & 0x7ffffffffffff; c = (limb)(t[1] >> 51);
+  t[2] += c;      r2 = (limb)t[2] & 0x7ffffffffffff; c = (limb)(t[2] >> 51);
+  t[3] += c;      r3 = (limb)t[3] & 0x7ffffffffffff; c = (limb)(t[3] >> 51);
+  t[4] += c;      r4 = (limb)t[4] & 0x7ffffffffffff; c = (limb)(t[4] >> 51);
+  r0 +=   c * 19; c = r0 >> 51; r0 = r0 & 0x7ffffffffffff;
+  r1 +=   c;      c = r1 >> 51; r1 = r1 & 0x7ffffffffffff;
+  r2 +=   c;
+
+  output[0] = r0;
+  output[1] = r1;
+  output[2] = r2;
+  output[3] = r3;
+  output[4] = r4;
+}
+
 
 static inline void force_inline
 fsquare_times(felem output, const felem in, limb count) {
@@ -279,6 +344,63 @@ fcontract(u8 *output, const felem input) {
   store_limb(output+16, (t[2] >> 26) | (t[3] << 25));
   store_limb(output+24, (t[3] >> 39) | (t[4] << 12));
 }
+
+/* returns 1 when the input is 0 
+ *
+ * based on fcontract
+ */
+static unsigned
+is_zero(const felem input) {
+  uint128_t t[5];
+
+  t[0] = input[0];
+  t[1] = input[1];
+  t[2] = input[2];
+  t[3] = input[3];
+  t[4] = input[4];
+
+  t[1] += t[0] >> 51; t[0] &= 0x7ffffffffffff;
+  t[2] += t[1] >> 51; t[1] &= 0x7ffffffffffff;
+  t[3] += t[2] >> 51; t[2] &= 0x7ffffffffffff;
+  t[4] += t[3] >> 51; t[3] &= 0x7ffffffffffff;
+  t[0] += 19 * (t[4] >> 51); t[4] &= 0x7ffffffffffff;
+
+  t[1] += t[0] >> 51; t[0] &= 0x7ffffffffffff;
+  t[2] += t[1] >> 51; t[1] &= 0x7ffffffffffff;
+  t[3] += t[2] >> 51; t[2] &= 0x7ffffffffffff;
+  t[4] += t[3] >> 51; t[3] &= 0x7ffffffffffff;
+  t[0] += 19 * (t[4] >> 51); t[4] &= 0x7ffffffffffff;
+
+  /* now t is between 0 and 2^255-1, properly carried. */
+  /* case 1: between 0 and 2^255-20. case 2: between 2^255-19 and 2^255-1. */
+
+  t[0] += 19;
+
+  t[1] += t[0] >> 51; t[0] &= 0x7ffffffffffff;
+  t[2] += t[1] >> 51; t[1] &= 0x7ffffffffffff;
+  t[3] += t[2] >> 51; t[2] &= 0x7ffffffffffff;
+  t[4] += t[3] >> 51; t[3] &= 0x7ffffffffffff;
+  t[0] += 19 * (t[4] >> 51); t[4] &= 0x7ffffffffffff;
+
+  /* now between 19 and 2^255-1 in both cases, and offset by 19. */
+
+  t[0] += 0x8000000000000 - 19;
+  t[1] += 0x8000000000000 - 1;
+  t[2] += 0x8000000000000 - 1;
+  t[3] += 0x8000000000000 - 1;
+  t[4] += 0x8000000000000 - 1;
+
+  /* now between 2^255 and 2^256-20, and offset by 2^255. */
+
+  t[1] += t[0] >> 51; 
+  t[2] += t[1] >> 51; 
+  t[3] += t[2] >> 51;
+  t[4] += t[3] >> 51;
+
+  return ( (t[0] | t[1] | t[2] | t[3] | t[4]) & 0x7ffffffffffff )==0;
+}
+
+
 
 /* Input: Q, Q', Q-Q'
  * Output: 2Q, Q+Q'
@@ -427,6 +549,139 @@ crecip(felem out, const felem z) {
   /* 2^255 - 21 */ fmul(out, t0, a);
 }
 
+// -----------------------------------------------------------------------------
+// This is based on http://ed25519.cr.yp.to/ed25519-20110926.pdf
+// "High-speed high-security signatures" sec 5. "Verifying signatures".
+// Simplified for u=1.
+//
+// The function calculates sqrt(1/v). v is passed in.
+//
+// Returns out = sqrt(1/v), out2 = 1/v
+//
+// The paper tells to calculate the intermediate quantity:
+//   beta = v^3 (v^7)^(q-5)/8 
+//        = v^3 (v^7)^(2^253-3)
+//   if v*beta^2 == -1 then
+//      beta = beta * sqrt(-1)
+//   output beta
+//
+// See also crecip.
+// -----------------------------------------------------------------------------
+static void
+csqrt_(felem out, felem out2, const felem v) {
+  felem a,t0,b,c;
+
+  felem v3, v7;
+
+  fsquare_times(a, v, 1);	// v^2
+  fsquare_times(b, a, 1);	// v^4
+  fmul(v3, v, a); // v^3
+  fmul(v7, v3, b); // v^7
+
+  /* raise v7 to 2^252-3 */
+
+  /* 2 */ fsquare_times(a, v7, 1); // a = 2
+  /* 8 */ fsquare_times(t0, a, 2);
+  /* 9 */ fmul(b, t0, v7); // b = 9
+  /* 11 */ fmul(a, b, a); // a = 11
+  /* 22 */ fsquare_times(t0, a, 1);
+  /* 2^5 - 2^0 = 31 */ fmul(b, t0, b);
+  /* 2^10 - 2^5 */ fsquare_times(t0, b, 5);
+  /* 2^10 - 2^0 */ fmul(b, t0, b);
+  /* 2^20 - 2^10 */ fsquare_times(t0, b, 10);
+  /* 2^20 - 2^0 */ fmul(c, t0, b);
+  /* 2^40 - 2^20 */ fsquare_times(t0, c, 20);
+  /* 2^40 - 2^0 */ fmul(t0, t0, c);
+  /* 2^50 - 2^10 */ fsquare_times(t0, t0, 10);
+  /* 2^50 - 2^0 */ fmul(b, t0, b);
+  /* 2^100 - 2^50 */ fsquare_times(t0, b, 50);
+  /* 2^100 - 2^0 */ fmul(c, t0, b);
+  /* 2^200 - 2^100 */ fsquare_times(t0, c, 100);
+  /* 2^200 - 2^0 */ fmul(t0, t0, c);
+  /* 2^250 - 2^50 */ fsquare_times(t0, t0, 50);
+  /* 2^250 - 2^0 */ fmul(t0, t0, b);
+  /* 2^252 - 2^2 */ fsquare_times(t0, t0, 2);
+  /* 2^252 - 3 */ fmul(v7, t0, v7);
+
+  fmul(b, v7, v3);	// b=beta
+
+  /* determine the sign */
+
+  fsquare_times(c, b, 1);	// c = beta^2
+  fmul(a, v, c);
+  a[0]++;	// a = v*beta^2 + 1
+
+  fmul(out, b, *_1__sqrt_neg_1[is_zero(a)]);	// out = beta
+  fsquare_times(out2, out, 1);	// out2 = beta^2
+}
+
+/*
+ * given x, z, return u=x/z and v=another coordinate
+ *
+ * zz = z^2
+ *
+ * T = x*(x^2 + d*x*z + zz) // z^3*v^2
+ * T1 = z * T  // == z^4*v^2
+ * (T2, T3) = csqrt_( T1 ), which is 
+ * T2 = 1/(z^2*v), 
+ * T3 = 1/(z^4*v^2)
+ *
+ * T4 = T*T3 = 1/z
+ *
+ * u = x*T4
+ * v = T*T4*T2
+ */
+static void
+u_v(felem u_out, felem v_out, const felem x, const felem z) {
+  felem zz, T, T1, T2, T3, T4;
+
+  fsquare_times(zz, z, 1);
+  fsquare_times(T, x, 1);	// x^2
+  fmul(T2, x, z);	// xz
+  fmuld(T2, T2, _d);	// dxz
+  fsum( T, T2 );	// x^2+dxz
+  fsum( T, zz );	// x^2+dxz+z^2
+  fmul(T, T, x);
+
+  fmul(T1, T, z);
+  
+  csqrt_(T2, T3, T1);
+
+  fmul(T4, T, T3);
+  
+  fmul(u_out, x, T4);
+
+  fmul(v_out, T, T4);
+  fmul(v_out, v_out, T2);
+}
+
+/*
+ * return 1 if the point (u,v) is on the curve
+ *
+ * T = u*(u^2 + d*u + 1)
+ * vv = v^2
+ * return T == vv
+ */
+static unsigned
+validate_u_v( const felem u, const felem v )  {
+  felem vv, T;
+
+  fsquare_times(vv, u, 1); // u^2
+  fmuld(T, u, _d);
+  fsum( T, vv );
+  T[0]++;
+  fmul(T, T, u);
+
+  fsquare_times(vv, v, 1); // v^2
+
+  fmul( vv, vv, neg_1 );
+  fsum( T, vv );
+
+  return( is_zero(T) );
+}
+
+
+
 int curve25519_donna(u8 *, const u8 *, const u8 *);
 
 int
@@ -442,8 +697,16 @@ curve25519_donna(u8 *mypublic, const u8 *secret, const u8 *basepoint) {
 
   fexpand(bp, basepoint);
   cmult(x, z, e, bp);
+
+#if 0	// set to 1 to calculate u only (for 3% better performance)
   crecip(zmone, z);
   fmul(z, x, zmone);
+#else
+  u_v( z, zmone, x, z );
+//validate_u_v( z, zmone );	// XXX for timing
+  
+#endif
+
   fcontract(mypublic, z);
   return 0;
 }
